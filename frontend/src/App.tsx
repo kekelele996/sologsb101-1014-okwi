@@ -10,12 +10,15 @@ import {
   BarChartOutlined,
   DashboardOutlined,
   ExperimentOutlined,
+  SafetyCertificateOutlined,
   ToolOutlined,
 } from '@ant-design/icons';
 import { ROUTES } from './router';
 import { usePlotStore } from './stores/plotStore';
 import { useReplantStore } from './stores/replantStore';
 import { useSurveyStore } from './stores/surveyStore';
+import { useQuarantineStore } from './stores/quarantineStore';
+import { useReleaseStore } from './stores/releaseStore';
 import { percentText } from './utils/rate';
 
 const { Header, Sider, Content, Footer } = Layout;
@@ -39,12 +42,16 @@ export default function App() {
   const loadAll = usePlotStore((state) => state.loadAll);
   const initSurvey = useSurveyStore((state) => state.init);
   const initReplant = useReplantStore((state) => state.init);
+  const initQuarantine = useQuarantineStore((state) => state.init);
+  const initRelease = useReleaseStore((state) => state.init);
 
   useEffect(() => {
     void loadAll();
     void initSurvey();
     void initReplant();
-  }, [loadAll, initSurvey, initReplant]);
+    void initQuarantine();
+    void initRelease();
+  }, [loadAll, initSurvey, initReplant, initQuarantine, initRelease]);
 
   const currentPlot = plots.find((plot) => plot.id === currentPlotId) ?? null;
   const currentStat = currentPlot === null ? null : statOf(currentPlot.id);
@@ -75,6 +82,9 @@ export default function App() {
         <div style={{ padding: '12px 16px', color: 'rgba(217,242,230,0.62)', fontSize: 12, lineHeight: 1.9 }}>
           <div>
             <DashboardOutlined /> 地块 {counts.plots ?? 0} · 批次 {counts.seedlings ?? 0}
+          </div>
+          <div>
+            <SafetyCertificateOutlined /> 检疫 {counts.quarantines ?? 0} · 放行 {counts.releases ?? 0}
           </div>
           <div>
             <BarChartOutlined /> 栽植 {counts.plantings ?? 0} · 验收 {counts.surveys ?? 0}

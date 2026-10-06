@@ -7,6 +7,8 @@ import { create } from 'zustand';
 import { liveQuery } from 'dexie';
 import type { Plot, PlotDraft, Substrate, TideZone } from '../types/plot';
 import type { Seedling } from '../types/seedling';
+import type { Quarantine } from '../types/quarantine';
+import type { ReleaseRequest } from '../types/release';
 import type { Planting } from '../types/planting';
 import type { Survey, RateLevel } from '../types/survey';
 import {
@@ -35,7 +37,15 @@ export interface PlotStat {
   seedlingCount: number;
   /** 进场苗木合计（株） */
   seedlingQuantity: number;
-  /** 栽植总株数（株） */
+  /** 已建检疫台账批次数（苗圃侧留底覆盖情况） */
+  quarantineCount: number;
+  /** 班组放行申请条数 */
+  releaseCount: number;
+  /** 挂起中的放行申请条数（未检疫 / 隔离期未满） */
+  heldCount: number;
+  /** 挂起批次的株数合计（不计栽植、不出补植） */
+  heldQuantity: number;
+  /** 栽植总株数（株，只含已放行下滩的苗） */
   plantTotal: number;
   /** 验收测次数 */
   surveyCount: number;
@@ -72,6 +82,8 @@ function writeCurrentPlotId(id: string | null): void {
 interface PlotStoreState {
   plots: Plot[];
   seedlings: Seedling[];
+  quarantines: Quarantine[];
+  releases: ReleaseRequest[];
   plantings: Planting[];
   surveys: Survey[];
   currentPlotId: string | null;
@@ -99,6 +111,10 @@ interface PlotStoreState {
 const EMPTY_STAT: Omit<PlotStat, 'plotId'> = {
   seedlingCount: 0,
   seedlingQuantity: 0,
+  quarantineCount: 0,
+  releaseCount: 0,
+  heldCount: 0,
+  heldQuantity: 0,
   plantTotal: 0,
   surveyCount: 0,
   latestRate: 0,
@@ -112,6 +128,8 @@ let subscribed = false;
 export const usePlotStore = create<PlotStoreState>((set, get) => ({
   plots: [],
   seedlings: [],
+  quarantines: [],
+  releases: [],
   plantings: [],
   surveys: [],
   currentPlotId: readCurrentPlotId(),
@@ -130,25 +148,38 @@ export const usePlotStore = create<PlotStoreState>((set, get) => ({
       if (!subscribed) {
         subscribed = true;
         liveQuery(async () => {
-          const [plots, seedlings, plantings, surveys] = await Promise.all([
+          const [plots, seedlings, quarantines, releases, plantings, surveys] = await Promise.all([
             db.plots.toArray(),
             db.seedlings.toArray(),
+            db.quarantines.toArray(),
+            db.releases.toArray(),
             db.plantings.toArray(),
             db.surveys.toArray(),
           ]);
-          return { plots, seedlings, plantings, surveys };
+          return { plots, seedlings, quarantines, releases, plantings, surveys };
         }).subscribe({
-          next: ({ plots, seedlings, plantings, surveys }) => {
+          next: ({ plots, seedlings, quarantines, releases, plantings, surveys }) => {
             const stats: Record<string, PlotStat> = {};
             const summaries: Record<string, SurvivalSummary> = {};
+            const seedlingById = new Map(seedlings.map((row) => [row.id, row]));
             plots.forEach((plot) => {
               const plotSeedlings = seedlings.filter((row) => row.plotId === plot.id);
+              const plotReleases = releases.filter((row) => row.plotId === plot.id);
+              const held = plotReleases.filter((row) => row.state !== '已放行');
               const summary = buildSurvivalSummary(plot.id, surveys, plantings);
               summaries[plot.id] = summary;
               stats[plot.id] = {
                 plotId: plot.id,
                 seedlingCount: plotSeedlings.length,
                 seedlingQuantity: plotSeedlings.reduce((acc, row) => acc + row.quantity, 0),
+                quarantineCount: quarantines.filter((row) => row.plotId === plot.id).length,
+                releaseCount: plotReleases.length,
+                heldCount: held.length,
+                // 挂起批株数：申请里没有的批次不计（还没报申请的苗不算「班组挂起」）
+                heldQuantity: held.reduce(
+                  (acc, row) => acc + (seedlingById.get(row.seedlingId)?.quantity ?? 0),
+                  0,
+                ),
                 plantTotal: summary.totalCount,
                 surveyCount: summary.points.length,
                 latestRate: summary.latestRate,
@@ -163,6 +194,8 @@ export const usePlotStore = create<PlotStoreState>((set, get) => ({
             set({
               plots: sorted,
               seedlings,
+              quarantines,
+              releases,
               plantings,
               surveys,
               stats,

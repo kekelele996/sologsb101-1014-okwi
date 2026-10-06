@@ -8,6 +8,8 @@ import type { Plot } from '../types/plot';
 import type { Survey } from '../types/survey';
 import type { Planting } from '../types/planting';
 import type { Seedling } from '../types/seedling';
+import type { Quarantine } from '../types/quarantine';
+import type { ReleaseRequest } from '../types/release';
 import type { Replant } from '../types/replant';
 import { RATE_LEVEL_LABEL } from '../types/survey';
 import { calcSurvivalRate, percentText, round1 } from './rate';
@@ -73,6 +75,13 @@ export function parseSnapshot(text: string): SnapshotParseResult {
       return { ok: false, message: `存档缺少 ${String(key)} 数组。`, snapshot: null };
     }
   }
+  // v3 新增的两张表：旧版本存档没有也能导入，按空集合处理（对应批次保持「未建检疫账 / 未申请」）
+  if (data.quarantines !== undefined && !Array.isArray(data.quarantines)) {
+    return { ok: false, message: '存档 quarantines 字段必须是数组。', snapshot: null };
+  }
+  if (data.releases !== undefined && !Array.isArray(data.releases)) {
+    return { ok: false, message: '存档 releases 字段必须是数组。', snapshot: null };
+  }
   return { ok: true, message: '存档校验通过。', snapshot: data as DatabaseSnapshot };
 }
 
@@ -80,6 +89,8 @@ export function parseSnapshot(text: string): SnapshotParseResult {
 export function exportSummaryCsv(
   plots: Plot[],
   seedlings: Seedling[],
+  quarantines: Quarantine[],
+  releases: ReleaseRequest[],
   plantings: Planting[],
   surveys: Survey[],
   replants: Replant[],
@@ -92,6 +103,10 @@ export function exportSummaryCsv(
     '修复方式',
     '状态',
     '苗木批次数',
+    '已建检疫台账(批)',
+    '放行申请(批)',
+    '挂起批次(批)',
+    '挂起株数(株)',
     '进场苗木合计(株)',
     '栽植总株数(株)',
     '测次数',
@@ -107,6 +122,13 @@ export function exportSummaryCsv(
   const lines: string[] = [header.map(csvCell).join(',')];
   plots.forEach((plot) => {
     const plotSeedlings = seedlings.filter((row) => row.plotId === plot.id);
+    const plotQuarantines = quarantines.filter((row) => row.plotId === plot.id);
+    const plotReleases = releases.filter((row) => row.plotId === plot.id);
+    const held = plotReleases.filter((row) => row.state !== '已放行');
+    const heldQuantity = held.reduce(
+      (acc, row) => acc + (plotSeedlings.find((item) => item.id === row.seedlingId)?.quantity ?? 0),
+      0,
+    );
     const plotPlantings = plantings.filter((row) => row.plotId === plot.id);
     const plotSurveys = surveys.filter((row) => row.plotId === plot.id).sort((a, b) => a.round - b.round);
     const plotReplants = replants.filter((row) => row.plotId === plot.id);
@@ -122,6 +144,10 @@ export function exportSummaryCsv(
         plot.restoreMode,
         plot.state,
         plotSeedlings.length,
+        plotQuarantines.length,
+        plotReleases.length,
+        held.length,
+        heldQuantity,
         plotSeedlings.reduce((acc, row) => acc + row.quantity, 0),
         total,
         plotSurveys.length,
@@ -145,12 +171,18 @@ export function exportSummaryCsv(
 export function exportSummaryCsvFile(
   plots: Plot[],
   seedlings: Seedling[],
+  quarantines: Quarantine[],
+  releases: ReleaseRequest[],
   plantings: Planting[],
   surveys: Survey[],
   replants: Replant[],
 ): string {
   const filename = `红树林成活率汇总-${stampSuffix()}.csv`;
-  download(filename, exportSummaryCsv(plots, seedlings, plantings, surveys, replants), 'text/csv;charset=utf-8');
+  download(
+    filename,
+    exportSummaryCsv(plots, seedlings, quarantines, releases, plantings, surveys, replants),
+    'text/csv;charset=utf-8',
+  );
   return filename;
 }
 

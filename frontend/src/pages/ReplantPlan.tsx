@@ -57,6 +57,8 @@ export default function ReplantPlan() {
   const { message, modal } = App.useApp();
   const plots = usePlotStore((state) => state.plots);
   const seedlings = usePlotStore((state) => state.seedlings);
+  const quarantines = usePlotStore((state) => state.quarantines);
+  const releases = usePlotStore((state) => state.releases);
   const plantings = usePlotStore((state) => state.plantings);
   const surveys = usePlotStore((state) => state.surveys);
   const statOf = usePlotStore((state) => state.statOf);
@@ -182,7 +184,7 @@ export default function ReplantPlan() {
   };
 
   const handleExportCsv = (): void => {
-    const filename = exportSummaryCsvFile(plots, seedlings, plantings, surveys, rows);
+    const filename = exportSummaryCsvFile(plots, seedlings, quarantines, releases, plantings, surveys, rows);
     message.success(`已导出成活率汇总 ${filename}`);
   };
 

@@ -79,13 +79,14 @@ export default function PlotList() {
 
   const totals = useMemo(() => {
     const plantTotal = plots.reduce((acc, plot) => acc + statOf(plot.id).plantTotal, 0);
+    const heldQuantity = plots.reduce((acc, plot) => acc + statOf(plot.id).heldQuantity, 0);
     const rated = plots.filter((plot) => statOf(plot.id).surveyCount > 0);
     const avgRate =
       rated.length === 0
         ? 0
         : Math.round((rated.reduce((acc, plot) => acc + statOf(plot.id).latestRate, 0) / rated.length) * 10) / 10;
     const warnCount = plots.filter((plot) => statOf(plot.id).surveyCount > 0 && statOf(plot.id).latestRate < 70).length;
-    return { plantTotal, avgRate, warnCount };
+    return { plantTotal, heldQuantity, avgRate, warnCount };
   }, [plots, statOf]);
 
   const openCreate = (): void => {
@@ -193,6 +194,21 @@ export default function PlotList() {
       render: (_value, record) => `${statOf(record.id).seedlingCount} 批`,
     },
     {
+      title: '放行 / 挂起',
+      key: 'release',
+      width: 120,
+      align: 'right',
+      render: (_value, record) => {
+        const stat = statOf(record.id);
+        return (
+          <Space size={4} style={{ justifyContent: 'flex-end' }}>
+            <Typography.Text style={{ color: '#1f8a4c' }}>{stat.releaseCount - stat.heldCount} 放行</Typography.Text>
+            {stat.heldCount > 0 ? <Tag color="orange">{stat.heldCount} 挂起</Tag> : null}
+          </Space>
+        );
+      },
+    },
+    {
       title: '栽植总株数',
       key: 'plantTotal',
       width: 112,
@@ -294,6 +310,13 @@ export default function PlotList() {
           icon={<ExperimentOutlined />}
         />
         <StatBadge
+          label="挂起株数（不计栽植）"
+          value={totals.heldQuantity.toLocaleString('zh-CN')}
+          suffix="株"
+          tone={totals.heldQuantity > 0 ? 'warning' : 'default'}
+          hint="未检疫 / 隔离期未满 / 不合格被挂起的批次株数，不计栽植总株数、不出补植"
+        />
+        <StatBadge
           label="平均成活率"
           value={percentText(totals.avgRate)}
           percent={totals.avgRate}
@@ -348,7 +371,7 @@ export default function PlotList() {
             loading={!ready}
             columns={columns}
             dataSource={rows}
-            scroll={{ x: 1480 }}
+            scroll={{ x: 1600 }}
             pagination={{ pageSize: 8, showSizeChanger: false }}
             locale={{
               emptyText: (
