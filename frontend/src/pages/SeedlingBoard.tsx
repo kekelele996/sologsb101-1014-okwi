@@ -22,13 +22,14 @@ import {
   Typography,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { ArrowLeftOutlined, DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, DeleteOutlined, EditOutlined, PlusOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
 import dayjs, { type Dayjs } from 'dayjs';
 import { useNavigate, useParams } from 'react-router-dom';
 import EmptyPanel from '../components/common/EmptyPanel';
 import StatBadge from '../components/common/StatBadge';
 import { useIdbTable } from '../hooks/useIdbTable';
 import { usePlotStore } from '../stores/plotStore';
+import { useNurseryStore } from '../stores/nurseryStore';
 import { db } from '../utils/db';
 import {
   SEEDLING_SOURCE_OPTIONS,
@@ -37,7 +38,10 @@ import {
   type SeedlingSource,
   type SeedlingSpecies,
 } from '../types/seedling';
+import { QUARANTINE_CONCLUSION_COLOR, type Quarantine } from '../types/quarantine';
 import { ROUTES } from '../router';
+import { isInIsolation, isolationEndDate } from '../utils/quarantine';
+import { today } from '../utils/id';
 import { muToM2, round1 } from '../utils/rate';
 
 interface SeedlingFormValues {
@@ -58,7 +62,9 @@ export default function SeedlingBoard() {
   const ready = usePlotStore((state) => state.ready);
   const plot = usePlotStore((state) => state.plots.find((item) => item.id === id));
   const plantings = usePlotStore((state) => state.plantings);
+  const onboardSeedling = useNurseryStore((state) => state.onboardSeedling);
   const { rows, loading, create, update, remove } = useIdbTable<Seedling>(db.seedlings, { sortByUpdatedAt: false });
+  const quarantineTable = useIdbTable<Quarantine>(db.quarantines, { sortByUpdatedAt: false });
 
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Seedling | null>(null);
@@ -69,6 +75,17 @@ export default function SeedlingBoard() {
     () => rows.filter((row) => row.plotId === id).sort((a, b) => b.arrivalDate.localeCompare(a.arrivalDate)),
     [rows, id],
   );
+
+  /** 每批苗木的检疫档案（苗圃侧独立留底），按批次 id 直接取 */
+  const quarantineBySeedling = useMemo(() => {
+    const map = new Map<string, Quarantine>();
+    quarantineTable.rows.filter((row) => row.plotId === id).forEach((row) => map.set(row.seedlingId, row));
+    return map;
+  }, [quarantineTable.rows, id]);
+
+  const pendingQuarantineCount = plotSeedlings.filter(
+    (row) => (quarantineBySeedling.get(row.id)?.conclusion ?? '待检') === '待检',
+  ).length;
 
   const totalQuantity = plotSeedlings.reduce((acc, row) => acc + row.quantity, 0);
   const usedQuantity = plantings
@@ -116,8 +133,14 @@ export default function SeedlingBoard() {
         arrivalDate: values.arrivalDate.format('YYYY-MM-DD'),
       };
       if (editing === null) {
-        await create(payload, 'seedling');
-        message.success(`已登记苗木批次：${payload.species} ${payload.quantity} 株`);
+        const row = await create(payload, 'seedling');
+        // 登记批次后苗圃侧自动留一条「待检」底档（失败不影响批次登记，可在检疫台账补建）
+        const archived = await onboardSeedling(row);
+        message.success(
+          archived
+            ? `已登记苗木批次：${payload.species} ${payload.quantity} 株（已留待检底档）`
+            : `已登记苗木批次：${payload.species} ${payload.quantity} 株（检疫底档待补建）`,
+        );
       } else {
         await update(editing.id, payload);
         message.success('苗木批次已更新');
@@ -202,6 +225,29 @@ export default function SeedlingBoard() {
       sorter: (a, b) => a.arrivalDate.localeCompare(b.arrivalDate),
     },
     {
+      title: '检疫状态',
+      key: 'quarantine',
+      width: 150,
+      render: (_value, record) => {
+        const q = quarantineBySeedling.get(record.id);
+        if (q === undefined) return <Tag>未建档</Tag>;
+        const isolating =
+          q.conclusion === '合格' && isInIsolation(q.isolatedFrom, q.isolationDays, today());
+        return (
+          <Space direction="vertical" size={0}>
+            <Tag color={QUARANTINE_CONCLUSION_COLOR[q.conclusion]}>
+              {q.conclusion} · 第{q.version}版
+            </Tag>
+            {isolating ? (
+              <Typography.Text type="warning" style={{ fontSize: 12 }}>
+                隔离至 {isolationEndDate(q.isolatedFrom, q.isolationDays)}
+              </Typography.Text>
+            ) : null}
+          </Space>
+        );
+      },
+    },
+    {
       title: '操作',
       key: 'action',
       width: 170,
@@ -261,7 +307,21 @@ export default function SeedlingBoard() {
           tone={overloaded ? 'danger' : 'default'}
           hint={`地块面积 ${plot.areaMu} 亩，建议每平方米不超过 ${MAX_PLANTS_PER_M2} 株`}
         />
+        <StatBadge
+          label="待检批次"
+          value={pendingQuarantineCount}
+          suffix="批"
+          tone={pendingQuarantineCount > 0 ? 'warning' : 'success'}
+          hint="检疫结论与隔离期由苗圃在检疫台账独立留底"
+        />
       </div>
+
+      <Space style={{ marginBottom: 14 }}>
+        <Button icon={<SafetyCertificateOutlined />} onClick={() => navigate(ROUTES.quarantines(plot.id))}>
+          苗圃检疫台账（结论 / 隔离期）
+        </Button>
+        <Button onClick={() => navigate(ROUTES.releases(plot.id))}>班组放行申请</Button>
+      </Space>
 
       {overloaded ? (
         <Alert

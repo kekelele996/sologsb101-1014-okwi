@@ -33,6 +33,11 @@ import { usePlotStore } from '../stores/plotStore';
 import { db } from '../utils/db';
 import type { Planting } from '../types/planting';
 import type { Seedling } from '../types/seedling';
+import type { ReleaseRequest } from '../types/release';
+import {
+  RELEASE_HOLD_REASON_LABEL,
+  RELEASE_STATE_COLOR,
+} from '../types/release';
 import { ROUTES } from '../router';
 import {
   DENSITY_MAX_M2_PER_PLANT,
@@ -66,6 +71,7 @@ export default function PlantingEntry() {
   const plot = usePlotStore((state) => state.plots.find((item) => item.id === id));
 
   const seedlingTable = useIdbTable<Seedling>(db.seedlings, { sortByUpdatedAt: false });
+  const releaseTable = useIdbTable<ReleaseRequest>(db.releaseRequests, { sortByUpdatedAt: false });
   const { rows, loading, create, update, remove } = useIdbTable<Planting>(db.plantings, { sortByUpdatedAt: false });
 
   const [keyword, setKeyword] = useState('');
@@ -79,6 +85,33 @@ export default function PlantingEntry() {
   const plotSeedlings = useMemo(
     () => seedlingTable.rows.filter((row) => row.plotId === id),
     [seedlingTable.rows, id],
+  );
+
+  /** 已放行批次 id 集合：只有已放行批次才能下滩栽植 */
+  const releasedSeedlingIds = usePlotStore((state) => state.releasedSeedlingIds);
+
+  /** 每批次最新放行申请，用于在选择框/表格里显示挂起原因与放行依据版本 */
+  const releaseBySeedling = useMemo(() => {
+    const map = new Map<string, ReleaseRequest>();
+    releaseTable.rows
+      .filter((row) => row.plotId === id)
+      .forEach((row) => {
+        const current = map.get(row.seedlingId);
+        if (current === undefined || row.createdAt > current.createdAt) map.set(row.seedlingId, row);
+      });
+    return map;
+  }, [releaseTable.rows, id]);
+
+  /** 挂起 / 驳回的批次（没检疫、隔离期内、不合格）：不能选作栽植 */
+  const gatedSeedlings = useMemo(
+    () => plotSeedlings.filter((row) => !releasedSeedlingIds.has(row.id)),
+    [plotSeedlings, releasedSeedlingIds],
+  );
+
+  /** 可栽植批次（已放行） */
+  const releasableSeedlings = useMemo(
+    () => plotSeedlings.filter((row) => releasedSeedlingIds.has(row.id)),
+    [plotSeedlings, releasedSeedlingIds],
   );
 
   const plotPlantings = useMemo(
@@ -105,24 +138,30 @@ export default function PlantingEntry() {
     });
   }, [plotPlantings, plotSeedlings, keyword, operatorFilter]);
 
-  const totalCount = plotPlantings.reduce((acc, row) => acc + row.count, 0);
+  // 挂起批次（没检疫 / 隔离期内）不计栽植总株数，只统计已放行批次
+  const totalCount = plotPlantings
+    .filter((row) => releasedSeedlingIds.has(row.seedlingId))
+    .reduce((acc, row) => acc + row.count, 0);
+  /** 挂起批次已暂挂的株数（不计入栽植总株数，单独提示） */
+  const heldCount = plotPlantings
+    .filter((row) => !releasedSeedlingIds.has(row.seedlingId))
+    .reduce((acc, row) => acc + row.count, 0);
+  const releasedPlantings = useMemo(
+    () => plotPlantings.filter((row) => releasedSeedlingIds.has(row.seedlingId)),
+    [plotPlantings, releasedSeedlingIds],
+  );
   const avgSpacing =
-    plotPlantings.length === 0
+    releasedPlantings.length === 0
       ? 0
-      : Math.round((plotPlantings.reduce((acc, row) => acc + row.spacingM, 0) / plotPlantings.length) * 100) / 100;
-  const usedSeedlingIds = new Set(plotPlantings.map((row) => row.seedlingId));
-
-  const seedlingLabel = (seedlingId: string): string => {
-    const seedling = seedlingTable.rows.find((row) => row.id === seedlingId);
-    return seedling === undefined ? '（批次已删除）' : `${seedling.species} · ${seedling.spec}`;
-  };
+      : Math.round((releasedPlantings.reduce((acc, row) => acc + row.spacingM, 0) / releasedPlantings.length) * 100) / 100;
+  const usedSeedlingIds = new Set(releasedPlantings.map((row) => row.seedlingId));
 
   const openCreate = (): void => {
     setEditing(null);
     setDensity(null);
     form.setFieldsValue({
       ...DEFAULT_VALUES,
-      seedlingId: plotSeedlings.length > 0 ? plotSeedlings[0].id : '',
+      seedlingId: releasableSeedlings.length > 0 ? releasableSeedlings[0].id : '',
       plantDate: dayjs(),
     });
     setOpen(true);
@@ -151,6 +190,19 @@ export default function PlantingEntry() {
     if (id === undefined) return;
     try {
       const values = await form.validateFields();
+      // 班组只能栽植已放行批次；挂起（没检疫 / 隔离期内）/ 驳回的拦下
+      if (!releasedSeedlingIds.has(values.seedlingId)) {
+        const request = releaseBySeedling.get(values.seedlingId);
+        message.error(
+          request === undefined
+            ? '该批次还没有放行申请，先到放行申请页报放行'
+            : `该批次${request.state}，不能栽植：${
+                request.holdReason === '' ? '等苗圃出检疫结论' : RELEASE_HOLD_REASON_LABEL[request.holdReason]
+              }`,
+          6,
+        );
+        return;
+      }
       setSubmitting(true);
       const payload = {
         plotId: id,
@@ -210,15 +262,27 @@ export default function PlantingEntry() {
     {
       title: '苗木批次',
       key: 'seedling',
-      width: 200,
-      render: (_value, record) => (
-        <Space direction="vertical" size={0}>
-          <span>{seedlingLabel(record.seedlingId)}</span>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            {plotSeedlings.find((item) => item.id === record.seedlingId)?.source ?? '—'}
-          </Typography.Text>
-        </Space>
-      ),
+      width: 230,
+      render: (_value, record) => {
+        const seedling = seedlingTable.rows.find((row) => row.id === record.seedlingId);
+        const request = releaseBySeedling.get(record.seedlingId);
+        const released = releasedSeedlingIds.has(record.seedlingId);
+        return (
+          <Space direction="vertical" size={0}>
+            <span>{seedling === undefined ? '（批次已删除）' : `${seedling.species} · ${seedling.spec}`}</span>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {seedling?.source ?? '—'}
+            </Typography.Text>
+            {request !== undefined ? (
+              <Tag color={RELEASE_STATE_COLOR[request.state]} style={{ marginTop: 2 }}>
+                {released
+                  ? `已放行 · 依据第 ${request.quarantineVersion} 版结论`
+                  : `${request.state}${request.holdReason === '' ? '' : ` · ${RELEASE_HOLD_REASON_LABEL[request.holdReason]}`}`}
+              </Tag>
+            ) : null}
+          </Space>
+        );
+      },
     },
     {
       title: '株距（米）',
@@ -299,40 +363,78 @@ export default function PlantingEntry() {
         <Tag>
           {plot.areaMu} 亩 / {Math.round(muToM2(plot.areaMu)).toLocaleString('zh-CN')} ㎡
         </Tag>
+        <Button size="small" onClick={() => navigate(ROUTES.releases(plot.id))}>
+          放行申请
+        </Button>
+        <Button size="small" onClick={() => navigate(ROUTES.quarantines(plot.id))}>
+          检疫台账
+        </Button>
       </Space>
 
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
-        <StatBadge label="栽植记录" value={plotPlantings.length} suffix="条" tone="primary" />
-        <StatBadge label="栽植总株数" value={totalCount.toLocaleString('zh-CN')} suffix="株" tone="info" />
+        <StatBadge label="栽植记录" value={releasedPlantings.length} suffix="条" tone="primary" />
+        <StatBadge
+          label="栽植总株数"
+          value={totalCount.toLocaleString('zh-CN')}
+          suffix="株"
+          tone="info"
+          hint="仅统计已放行批次；挂起批次不计入"
+        />
+        <StatBadge label="挂起株数（不计入）" value={heldCount.toLocaleString('zh-CN')} suffix="株" tone={heldCount > 0 ? 'warning' : 'default'} />
         <StatBadge label="平均株距" value={avgSpacing.toFixed(2)} suffix="米" tone="default" />
         <StatBadge
-          label="已引用批次"
-          value={`${usedSeedlingIds.size} / ${plotSeedlings.length}`}
-          percent={plotSeedlings.length > 0 ? (usedSeedlingIds.size / plotSeedlings.length) * 100 : 0}
+          label="已栽植 / 已放行批次"
+          value={`${usedSeedlingIds.size} / ${releasableSeedlings.length}`}
+          percent={releasableSeedlings.length > 0 ? (usedSeedlingIds.size / releasableSeedlings.length) * 100 : 0}
           tone="success"
-          hint="已被栽植记录引用的苗木批次占全部批次的比例"
+          hint="已被栽植记录引用的已放行批次占比"
         />
       </div>
 
-      {plotSeedlings.length === 0 ? (
+      {releasableSeedlings.length === 0 ? (
         <Alert
           type="warning"
           showIcon
           style={{ marginBottom: 14 }}
-          message="该地块尚未登记苗木批次"
-          description="栽植记录必须引用一个苗木批次，请先到苗木批次页登记进场苗木。"
+          message="该地块还没有已放行的苗木批次"
+          description={
+            gatedSeedlings.length > 0
+              ? `${gatedSeedlings.length} 批苗因没检疫或仍在隔离期内被挂起，等苗圃出结论放行后才能栽植，且不计入栽植总株数。`
+              : '班组领苗下滩前需先按批次报放行申请，取得苗圃检疫合格且隔离期满的放行结论。'
+          }
           action={
-            <Button size="small" onClick={() => navigate(ROUTES.seedlings(plot.id))}>
-              去登记苗木批次
+            <Button size="small" onClick={() => navigate(ROUTES.releases(plot.id))}>
+              去报放行申请
             </Button>
           }
+        />
+      ) : null}
+
+      {gatedSeedlings.length > 0 ? (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 14 }}
+          message={`${gatedSeedlings.length} 批苗挂起中，不计栽植总株数、不出补植计划`}
+          description={gatedSeedlings
+            .map((row) => {
+              const request = releaseBySeedling.get(row.id);
+              const reason =
+                request === undefined
+                  ? '尚无放行申请'
+                  : request.state === '已放行'
+                    ? '已放行'
+                    : RELEASE_HOLD_REASON_LABEL[request.holdReason === '' ? '无检疫结论' : request.holdReason];
+              return `${row.species}（${reason}）`;
+            })
+            .join('；')}
         />
       ) : null}
 
       <Card
         title="栽植记录"
         extra={
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate} disabled={plotSeedlings.length === 0}>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate} disabled={releasableSeedlings.length === 0}>
             新增栽植记录
           </Button>
         }
@@ -394,13 +496,22 @@ export default function PlantingEntry() {
         width={560}
       >
         <Form form={form} layout="vertical" initialValues={DEFAULT_VALUES} onValuesChange={handleValuesChange}>
-          <Form.Item name="seedlingId" label="苗木批次" rules={[{ required: true, message: '请选择苗木批次' }]}>
+          <Form.Item
+            name="seedlingId"
+            label="苗木批次（仅可选择已放行批次）"
+            rules={[{ required: true, message: '请选择已放行的苗木批次' }]}
+          >
             <Select
-              placeholder="选择该地块下的苗木批次"
-              options={plotSeedlings.map((row) => ({
-                value: row.id,
-                label: `${row.species} · ${row.spec} · ${row.quantity} 株（${row.source}）`,
-              }))}
+              placeholder="选择已检疫合格、隔离期满并放行的批次"
+              options={releasableSeedlings.map((row) => {
+                const request = releaseBySeedling.get(row.id);
+                return {
+                  value: row.id,
+                  label: `${row.species} · ${row.spec} · ${row.quantity} 株（${row.source}${
+                    request ? ` · 第${request.quarantineVersion}版放行` : ''
+                  }）`,
+                };
+              })}
             />
           </Form.Item>
           <Space size={12} style={{ display: 'flex' }}>

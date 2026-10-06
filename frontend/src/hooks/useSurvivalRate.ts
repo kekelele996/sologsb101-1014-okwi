@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { liveQuery } from 'dexie';
 import type { Survey, RateLevel } from '../types/survey';
 import type { Planting } from '../types/planting';
+import type { ReleaseRequest } from '../types/release';
 import { db, initDatabase } from '../utils/db';
 import {
   SURVIVAL_WARN_RATE,
@@ -15,6 +16,7 @@ import {
   round1,
   suggestReplantCount,
 } from '../utils/rate';
+import { selectReleasedSeedlingIds } from '../stores/releaseStore';
 
 /** 单个测次的成活率数据点 */
 export interface SurvivalPoint {
@@ -57,15 +59,21 @@ export interface SurvivalSummary {
   warn: boolean;
 }
 
-/** 纯函数：由验收记录与栽植记录派生地块成活率汇总 */
+/**
+ * 纯函数：由验收记录与栽植记录派生地块成活率汇总。
+ * allowedSeedlingIds 非空时，只统计「已放行」批次的栽植记录——
+ * 挂起（没检疫 / 隔离期内）的批次苗不计栽植总株数，也不出补植计划。
+ */
 export function buildSurvivalSummary(
   plotId: string,
   surveys: Survey[],
   plantings: Planting[],
   threshold: number = SURVIVAL_WARN_RATE,
+  allowedSeedlingIds?: Set<string> | null,
 ): SurvivalSummary {
   const totalCount = plantings
     .filter((row) => row.plotId === plotId)
+    .filter((row) => allowedSeedlingIds === null || allowedSeedlingIds === undefined || allowedSeedlingIds.has(row.seedlingId))
     .reduce((acc, row) => acc + row.count, 0);
 
   const points: SurvivalPoint[] = surveys
@@ -122,6 +130,7 @@ export function emptySummary(plotId: string): SurvivalSummary {
 export function useSurvivalRate(plotId: string | null, threshold: number = SURVIVAL_WARN_RATE): UseSurvivalRateResult {
   const [surveys, setSurveys] = useState<Survey[]>([]);
   const [plantings, setPlantings] = useState<Planting[]>([]);
+  const [releases, setReleases] = useState<ReleaseRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -130,13 +139,18 @@ export function useSurvivalRate(plotId: string | null, threshold: number = SURVI
     setLoading(true);
     const subscription = liveQuery(async () => {
       await initDatabase();
-      const [surveyRows, plantingRows] = await Promise.all([db.surveys.toArray(), db.plantings.toArray()]);
-      return { surveyRows, plantingRows };
+      const [surveyRows, plantingRows, releaseRows] = await Promise.all([
+        db.surveys.toArray(),
+        db.plantings.toArray(),
+        db.releaseRequests.toArray(),
+      ]);
+      return { surveyRows, plantingRows, releaseRows };
     }).subscribe({
-      next: ({ surveyRows, plantingRows }) => {
+      next: ({ surveyRows, plantingRows, releaseRows }) => {
         if (!active) return;
         setSurveys(surveyRows);
         setPlantings(plantingRows);
+        setReleases(releaseRows);
         setError('');
         setLoading(false);
       },
@@ -152,9 +166,14 @@ export function useSurvivalRate(plotId: string | null, threshold: number = SURVI
     };
   }, []);
 
+  const releasedIds = useMemo(() => selectReleasedSeedlingIds(releases), [releases]);
+
   const summary = useMemo(
-    () => (plotId === null ? emptySummary('') : buildSurvivalSummary(plotId, surveys, plantings, threshold)),
-    [plotId, surveys, plantings, threshold],
+    () =>
+      plotId === null
+        ? emptySummary('')
+        : buildSurvivalSummary(plotId, surveys, plantings, threshold, releasedIds),
+    [plotId, surveys, plantings, threshold, releasedIds],
   );
 
   return { summary, loading, error };

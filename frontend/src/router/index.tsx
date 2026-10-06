@@ -9,6 +9,8 @@ import App from '../App';
 
 const PlotList = lazy(() => import('../pages/PlotList'));
 const SeedlingBoard = lazy(() => import('../pages/SeedlingBoard'));
+const QuarantineBoard = lazy(() => import('../pages/QuarantineBoard'));
+const ReleaseGate = lazy(() => import('../pages/ReleaseGate'));
 const PlantingEntry = lazy(() => import('../pages/PlantingEntry'));
 const SurveyBoard = lazy(() => import('../pages/SurveyBoard'));
 const ReplantPlan = lazy(() => import('../pages/ReplantPlan'));
@@ -17,6 +19,8 @@ const ReplantPlan = lazy(() => import('../pages/ReplantPlan'));
 export const ROUTES = {
   plots: '/plots',
   seedlings: (plotId: string): string => `/plots/${plotId}/seedlings`,
+  quarantines: (plotId: string): string => `/plots/${plotId}/quarantines`,
+  releases: (plotId: string): string => `/plots/${plotId}/releases`,
   plantings: (plotId: string): string => `/plots/${plotId}/plantings`,
   surveys: '/surveys',
   replants: '/replants',
@@ -39,6 +43,8 @@ export const appRoutes: RouteObject[] = [
       { index: true, element: <Navigate to={ROUTES.plots} replace /> },
       { path: 'plots', element: withSuspense(<PlotList />) },
       { path: 'plots/:id/seedlings', element: withSuspense(<SeedlingBoard />) },
+      { path: 'plots/:id/quarantines', element: withSuspense(<QuarantineBoard />) },
+      { path: 'plots/:id/releases', element: withSuspense(<ReleaseGate />) },
       { path: 'plots/:id/plantings', element: withSuspense(<PlantingEntry />) },
       { path: 'surveys', element: withSuspense(<SurveyBoard />) },
       { path: 'replants', element: withSuspense(<ReplantPlan />) },

@@ -9,6 +9,7 @@ import type { Plot, PlotDraft, Substrate, TideZone } from '../types/plot';
 import type { Seedling } from '../types/seedling';
 import type { Planting } from '../types/planting';
 import type { Survey, RateLevel } from '../types/survey';
+import type { ReleaseRequest } from '../types/release';
 import {
   DB_SCHEMA_VERSION,
   ROW_REVISION,
@@ -19,6 +20,7 @@ import {
   removePlot,
 } from '../utils/db';
 import { buildSurvivalSummary, type SurvivalSummary } from '../hooks/useSurvivalRate';
+import { selectReleasedSeedlingIds } from './releaseStore';
 import { nowIso, uuid } from '../utils/id';
 
 /** 地块筛选条件（关键字 + 潮位带 + 底质），由 <FilterBar> 同步到 URL query */
@@ -74,6 +76,10 @@ interface PlotStoreState {
   seedlings: Seedling[];
   plantings: Planting[];
   surveys: Survey[];
+  /** 班组放行申请：挂起批次不计栽植总株数 */
+  releases: ReleaseRequest[];
+  /** 已放行批次 id 集合（栽植 / 成活率 / 补植只认这些批次） */
+  releasedSeedlingIds: Set<string>;
   currentPlotId: string | null;
   loading: boolean;
   ready: boolean;
@@ -114,6 +120,8 @@ export const usePlotStore = create<PlotStoreState>((set, get) => ({
   seedlings: [],
   plantings: [],
   surveys: [],
+  releases: [],
+  releasedSeedlingIds: new Set<string>(),
   currentPlotId: readCurrentPlotId(),
   loading: true,
   ready: false,
@@ -130,20 +138,23 @@ export const usePlotStore = create<PlotStoreState>((set, get) => ({
       if (!subscribed) {
         subscribed = true;
         liveQuery(async () => {
-          const [plots, seedlings, plantings, surveys] = await Promise.all([
+          const [plots, seedlings, plantings, surveys, releases] = await Promise.all([
             db.plots.toArray(),
             db.seedlings.toArray(),
             db.plantings.toArray(),
             db.surveys.toArray(),
+            db.releaseRequests.toArray(),
           ]);
-          return { plots, seedlings, plantings, surveys };
+          return { plots, seedlings, plantings, surveys, releases };
         }).subscribe({
-          next: ({ plots, seedlings, plantings, surveys }) => {
+          next: ({ plots, seedlings, plantings, surveys, releases }) => {
             const stats: Record<string, PlotStat> = {};
             const summaries: Record<string, SurvivalSummary> = {};
+            // 挂起（没检疫 / 隔离期内）批次的栽植不计入，只认已放行批次
+            const releasedIds = selectReleasedSeedlingIds(releases);
             plots.forEach((plot) => {
               const plotSeedlings = seedlings.filter((row) => row.plotId === plot.id);
-              const summary = buildSurvivalSummary(plot.id, surveys, plantings);
+              const summary = buildSurvivalSummary(plot.id, surveys, plantings, undefined, releasedIds);
               summaries[plot.id] = summary;
               stats[plot.id] = {
                 plotId: plot.id,
@@ -165,6 +176,8 @@ export const usePlotStore = create<PlotStoreState>((set, get) => ({
               seedlings,
               plantings,
               surveys,
+              releases,
+              releasedSeedlingIds: releasedIds,
               stats,
               summaries,
               loading: false,

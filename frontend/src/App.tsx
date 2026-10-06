@@ -10,6 +10,7 @@ import {
   BarChartOutlined,
   DashboardOutlined,
   ExperimentOutlined,
+  SafetyCertificateOutlined,
   ToolOutlined,
 } from '@ant-design/icons';
 import { ROUTES } from './router';
@@ -77,6 +78,9 @@ export default function App() {
             <DashboardOutlined /> 地块 {counts.plots ?? 0} · 批次 {counts.seedlings ?? 0}
           </div>
           <div>
+            <SafetyCertificateOutlined /> 检疫 {counts.quarantines ?? 0} · 放行 {counts.releaseRequests ?? 0}
+          </div>
+          <div>
             <BarChartOutlined /> 栽植 {counts.plantings ?? 0} · 验收 {counts.surveys ?? 0}
           </div>
           <div>
@@ -123,6 +127,12 @@ export default function App() {
               <>
                 <Button size="small" onClick={() => navigate(ROUTES.seedlings(currentPlot.id))}>
                   苗木批次
+                </Button>
+                <Button size="small" onClick={() => navigate(ROUTES.quarantines(currentPlot.id))}>
+                  检疫台账
+                </Button>
+                <Button size="small" onClick={() => navigate(ROUTES.releases(currentPlot.id))}>
+                  放行申请
                 </Button>
                 <Button size="small" onClick={() => navigate(ROUTES.plantings(currentPlot.id))}>
                   栽植记录

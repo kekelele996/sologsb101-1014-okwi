@@ -49,9 +49,11 @@ interface SurveyStoreState {
 }
 
 function totalPlantedOf(plotId: string): number {
-  return usePlotStore
-    .getState()
-    .plantings.filter((row) => row.plotId === plotId)
+  const { plantings, releasedSeedlingIds } = usePlotStore.getState();
+  return plantings
+    .filter((row) => row.plotId === plotId)
+    // 挂起批次（没检疫 / 隔离期内）不计栽植总株数
+    .filter((row) => releasedSeedlingIds.has(row.seedlingId))
     .reduce((acc, row) => acc + row.count, 0);
 }
 

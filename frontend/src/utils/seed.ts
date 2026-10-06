@@ -9,7 +9,10 @@ import type { Seedling } from '../types/seedling';
 import type { Planting } from '../types/planting';
 import type { Survey } from '../types/survey';
 import type { Replant } from '../types/replant';
+import type { Quarantine } from '../types/quarantine';
+import type { ReleaseRequest } from '../types/release';
 import { calcSurvivalRate, rateLevel } from './rate';
+import { releaseSnapshotText } from './quarantine';
 
 const SEED_TIME = '2025-01-06T02:00:00.000Z';
 
@@ -46,6 +49,14 @@ function surveyRow(row: Omit<Survey, 'createdAt' | 'updatedAt' | 'revision' | 'g
 }
 
 function replantRow(row: Omit<Replant, 'createdAt' | 'updatedAt' | 'revision'>): Replant {
+  return { ...row, createdAt: SEED_TIME, updatedAt: SEED_TIME, revision: ROW_REVISION };
+}
+
+function quarantineRow(row: Omit<Quarantine, 'createdAt' | 'updatedAt' | 'revision'>): Quarantine {
+  return { ...row, createdAt: SEED_TIME, updatedAt: SEED_TIME, revision: ROW_REVISION };
+}
+
+function releaseRow(row: Omit<ReleaseRequest, 'createdAt' | 'updatedAt' | 'revision'>): ReleaseRequest {
   return { ...row, createdAt: SEED_TIME, updatedAt: SEED_TIME, revision: ROW_REVISION };
 }
 
@@ -94,10 +105,11 @@ export async function seedDatabase(): Promise<void> {
     }),
   ];
 
-  // ---------------- 苗木批次（每地块 2 批） ----------------
+  // ---------------- 苗木批次（每地块 2 批，另留 1 批待检在隔离） ----------------
   const seedlings: Seedling[] = [
     seedlingRow({ id: 'seedling-a1', plotId: SEED_IDS.plotA, species: '秋茄', source: '自育苗', spec: '50cm 裸根苗', quantity: 3200, arrivalDate: '2024-04-05' }),
     seedlingRow({ id: 'seedling-a2', plotId: SEED_IDS.plotA, species: '桐花树', source: '外购', spec: '40cm 营养袋苗', quantity: 2400, arrivalDate: '2024-04-10' }),
+    seedlingRow({ id: 'seedling-a3', plotId: SEED_IDS.plotA, species: '白骨壤', source: '外购', spec: '45cm 营养袋苗', quantity: 1500, arrivalDate: '2025-03-20' }),
     seedlingRow({ id: 'seedling-b1', plotId: SEED_IDS.plotB, species: '白骨壤', source: '自育苗', spec: '45cm 裸根苗', quantity: 1900, arrivalDate: '2024-04-28' }),
     seedlingRow({ id: 'seedling-b2', plotId: SEED_IDS.plotB, species: '秋茄', source: '外购', spec: '50cm 营养袋苗', quantity: 1600, arrivalDate: '2024-05-02' }),
     seedlingRow({ id: 'seedling-c1', plotId: SEED_IDS.plotC, species: '无瓣海桑', source: '外购', spec: '60cm 营养袋苗', quantity: 4400, arrivalDate: '2024-03-12' }),
@@ -139,11 +151,102 @@ export async function seedDatabase(): Promise<void> {
     replantRow({ id: 'replant-c1', plotId: SEED_IDS.plotC, missingCount: 560, planDate: '2024-11-05', species: '无瓣海桑', state: '已复核' }),
   ];
 
-  await db.transaction('rw', db.plots, db.seedlings, db.plantings, db.surveys, db.replants, async () => {
-    await db.plots.bulkPut(plots);
-    await db.seedlings.bulkPut(seedlings);
-    await db.plantings.bulkPut(plantings);
-    await db.surveys.bulkPut(surveys);
-    await db.replants.bulkPut(replants);
+  // ---------------- 苗圃检疫档案（已栽植批次合格放行；a3 待检在隔离） ----------------
+  const quarantines: Quarantine[] = [
+    quarantineRow({
+      id: 'quarantine-a1', seedlingId: 'seedling-a1', plotId: SEED_IDS.plotA, conclusion: '合格', version: 1,
+      isolationDays: 7, isolatedFrom: '2024-04-05', inspectedDate: '2024-04-06', inspector: '市林检站 · 陈检疫', source: '苗圃登记',
+    }),
+    quarantineRow({
+      id: 'quarantine-a2', seedlingId: 'seedling-a2', plotId: SEED_IDS.plotA, conclusion: '合格', version: 1,
+      isolationDays: 5, isolatedFrom: '2024-04-10', inspectedDate: '2024-04-11', inspector: '市林检站 · 陈检疫', source: '苗圃登记',
+    }),
+    quarantineRow({
+      id: 'quarantine-a3', seedlingId: 'seedling-a3', plotId: SEED_IDS.plotA, conclusion: '待检', version: 1,
+      isolationDays: 10, isolatedFrom: '2025-03-20', inspectedDate: '', inspector: '', source: '苗圃登记',
+    }),
+    quarantineRow({
+      id: 'quarantine-b1', seedlingId: 'seedling-b1', plotId: SEED_IDS.plotB, conclusion: '合格', version: 1,
+      isolationDays: 7, isolatedFrom: '2024-04-28', inspectedDate: '2024-04-29', inspector: '区林检站 · 林检疫', source: '苗圃登记',
+    }),
+    quarantineRow({
+      id: 'quarantine-b2', seedlingId: 'seedling-b2', plotId: SEED_IDS.plotB, conclusion: '合格', version: 1,
+      isolationDays: 7, isolatedFrom: '2024-05-02', inspectedDate: '2024-05-03', inspector: '区林检站 · 林检疫', source: '苗圃登记',
+    }),
+    quarantineRow({
+      id: 'quarantine-c1', seedlingId: 'seedling-c1', plotId: SEED_IDS.plotC, conclusion: '合格', version: 1,
+      isolationDays: 7, isolatedFrom: '2024-03-12', inspectedDate: '2024-03-13', inspector: '省林检站 · 黄检疫', source: '苗圃登记',
+    }),
+    quarantineRow({
+      id: 'quarantine-c2', seedlingId: 'seedling-c2', plotId: SEED_IDS.plotC, conclusion: '合格', version: 1,
+      isolationDays: 7, isolatedFrom: '2024-03-16', inspectedDate: '2024-03-17', inspector: '省林检站 · 黄检疫', source: '苗圃登记',
+    }),
+  ];
+  const quarantineBySeedling = new Map(quarantines.map((row) => [row.seedlingId, row]));
+
+  // ---------------- 班组放行申请（6 批已放行；a3 没检疫结论挂起，不计栽植） ----------------
+  const releasedSeedlingIds = ['seedling-a1', 'seedling-a2', 'seedling-b1', 'seedling-b2', 'seedling-c1', 'seedling-c2'] as const;
+  const releasedAtBySeedling: Record<string, string> = {
+    'seedling-a1': '2024-04-12',
+    'seedling-a2': '2024-04-15',
+    'seedling-b1': '2024-05-06',
+    'seedling-b2': '2024-05-09',
+    'seedling-c1': '2024-03-20',
+    'seedling-c2': '2024-03-24',
+  };
+  const releaseRequests: ReleaseRequest[] = releasedSeedlingIds.map((seedlingId, index) => {
+    const seedling = seedlings.find((row) => row.id === seedlingId)!;
+    const quarantine = quarantineBySeedling.get(seedlingId)!;
+    const releasedAt = releasedAtBySeedling[seedlingId];
+    return releaseRow({
+      id: `release-${index + 1}`,
+      plotId: seedling.plotId,
+      seedlingId,
+      quantity: seedling.quantity,
+      operator: '苗圃统一放行',
+      requestDate: releasedAt,
+      state: '已放行',
+      holdReason: '',
+      quarantineVersion: quarantine.version,
+      releasedConclusion: releaseSnapshotText(quarantine),
+      releasedAt,
+    });
   });
+  releaseRequests.push(
+    releaseRow({
+      id: 'release-a3',
+      plotId: SEED_IDS.plotA,
+      seedlingId: 'seedling-a3',
+      quantity: 1500,
+      operator: '东港一班',
+      requestDate: '2025-03-22',
+      state: '挂起',
+      holdReason: '无检疫结论',
+      quarantineVersion: 1,
+      releasedConclusion: '',
+      releasedAt: '',
+    }),
+  );
+
+  await db.transaction(
+    'rw',
+    [
+      db.plots,
+      db.seedlings,
+      db.plantings,
+      db.surveys,
+      db.replants,
+      db.quarantines,
+      db.releaseRequests,
+    ],
+    async () => {
+      await db.plots.bulkPut(plots);
+      await db.seedlings.bulkPut(seedlings);
+      await db.plantings.bulkPut(plantings);
+      await db.surveys.bulkPut(surveys);
+      await db.replants.bulkPut(replants);
+      await db.quarantines.bulkPut(quarantines);
+      await db.releaseRequests.bulkPut(releaseRequests);
+    },
+  );
 }

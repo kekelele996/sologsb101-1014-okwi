@@ -67,6 +67,7 @@ export function parseSnapshot(text: string): SnapshotParseResult {
       snapshot: null,
     };
   }
+  // 检疫档案 / 放行申请是 v3 才有的两摊，旧存档可以没有，导入时按空集合兜底
   const collections: Array<keyof DatabaseSnapshot> = ['plots', 'seedlings', 'plantings', 'surveys', 'replants'];
   for (const key of collections) {
     if (!Array.isArray(data[key])) {

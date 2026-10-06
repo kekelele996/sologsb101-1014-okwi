@@ -238,7 +238,7 @@ export default function PlotList() {
     {
       title: '操作',
       key: 'action',
-      width: 260,
+      width: 400,
       fixed: 'right',
       render: (_value, record) => (
         <Space size={4} wrap>
@@ -261,6 +261,26 @@ export default function PlotList() {
             }}
           >
             栽植记录
+          </Button>
+          <Button
+            size="small"
+            type="link"
+            onClick={() => {
+              selectPlot(record.id);
+              navigate(ROUTES.quarantines(record.id));
+            }}
+          >
+            检疫台账
+          </Button>
+          <Button
+            size="small"
+            type="link"
+            onClick={() => {
+              selectPlot(record.id);
+              navigate(ROUTES.releases(record.id));
+            }}
+          >
+            放行申请
           </Button>
           <Button size="small" type="link" icon={<EditOutlined />} onClick={() => openEdit(record)}>
             编辑
@@ -348,7 +368,7 @@ export default function PlotList() {
             loading={!ready}
             columns={columns}
             dataSource={rows}
-            scroll={{ x: 1480 }}
+            scroll={{ x: 1620 }}
             pagination={{ pageSize: 8, showSizeChanger: false }}
             locale={{
               emptyText: (
